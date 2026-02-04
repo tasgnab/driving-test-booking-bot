@@ -1,0 +1,567 @@
+const { test, expect } = require('@playwright/test');
+const fs = require('fs');
+const path = require('path');
+require('dotenv').config();
+
+// Config file path
+const CONFIG_FILE = path.join(__dirname, 'config.json');
+
+// Load credentials from environment variables or .env file
+const LOGIN_URL = 'https://www.myrta.com/wps/portal/extvp/myrta/licence/tbs/tbs-login/';
+const USERNAME = process.env.USER_NAME;
+const PASSWORD = process.env.PASSWORD;
+const LOCATION = process.env.LOCATION || '37'; // Default location
+const LOCATIONS = process.env.LOCATIONS?.split(',') || [LOCATION]; // Multiple locations to check
+
+// Optional: Preferred booking criteria (set in .env or here)
+const PREFERRED_DAYS = process.env.PREFERRED_DAYS?.split(',') || []; // e.g., ['Mon', 'Tue', 'Wed']
+const PREFERRED_TIMES = process.env.PREFERRED_TIMES?.split(',') || []; // e.g., ['9:15 am', '10:00 am']
+const MIN_TIME = process.env.MIN_TIME || '8:00 am'; // Earliest acceptable time
+const MAX_TIME = process.env.MAX_TIME || '5:00 pm'; // Latest acceptable time
+
+// Helper function to read config
+function readConfig() {
+  try {
+    const data = fs.readFileSync(CONFIG_FILE, 'utf8');
+    return JSON.parse(data);
+  } catch (error) {
+    console.log('⚠️  Config file not found, creating default...');
+    const defaultConfig = { SHOULD_RUN: true };
+    writeConfig(defaultConfig);
+    return defaultConfig;
+  }
+}
+
+// Helper function to write config
+function writeConfig(config) {
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8');
+}
+
+// Helper function to check if script should run
+function shouldRun() {
+  const config = readConfig();
+  return config.SHOULD_RUN === true;
+}
+
+// Helper function to send webhook notification
+async function sendNotification(message) {
+  const webhookUrl = 'https://n8n.thopo.dev/webhook/c9a315be-62c5-4b9b-a295-36771de2f5a9';
+
+  const payload = {
+    source: "drivingTestBot",
+    message: message,
+    hostname: "n8n.thopo.dev",
+    severity: "NEWS"
+  };
+
+  try {
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (response.ok) {
+      console.log('✅ Notification sent successfully');
+    } else {
+      console.log(`⚠️  Notification failed: ${response.status}`);
+    }
+  } catch (error) {
+    console.log(`⚠️  Notification error: ${error.message}`);
+  }
+}
+
+// Helper function to stop future runs
+function stopFutureRuns() {
+  const config = readConfig();
+  config.SHOULD_RUN = false;
+  writeConfig(config);
+  console.log('\n🛑 SHOULD_RUN set to FALSE in config.json');
+  console.log('💡 To run again, manually set SHOULD_RUN to true in config.json');
+}
+
+// Helper function for random human-like delays
+async function humanDelay(page, minMs = 500, maxMs = 1500) {
+  const delay = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
+  await page.waitForTimeout(delay);
+}
+
+// Helper function to filter slots based on preferences
+function filterSlots(slotsInfo) {
+  let filtered = [...slotsInfo];
+
+  // Filter by preferred days if specified
+  if (PREFERRED_DAYS.length > 0) {
+    filtered = filtered.filter(slot =>
+      PREFERRED_DAYS.some(day => slot.date?.includes(day))
+    );
+  }
+
+  // Filter by preferred times if specified
+  if (PREFERRED_TIMES.length > 0) {
+    filtered = filtered.filter(slot =>
+      PREFERRED_TIMES.some(time => slot.time?.includes(time))
+    );
+  }
+
+  return filtered;
+}
+
+// Helper function to navigate through login and setup
+async function navigateToSchedule(page, location = LOCATION) {
+  console.log('Navigating to login page...');
+  await page.goto(LOGIN_URL, { waitUntil: 'networkidle' });
+  await humanDelay(page, 1000, 2000);
+
+  console.log('Clicking "Log in - you have an account"...');
+  await page.getByText('Log in - you have an account').click();
+  await humanDelay(page, 1500, 2500);
+
+  // Wait for login form to appear
+  console.log('Waiting for login form...');
+  await page.waitForSelector('#widget_cardNumber', { timeout: 10000 });
+  await humanDelay(page, 500, 1000);
+
+  console.log('Filling in credentials...');
+  // Type username character by character to simulate human typing
+  await page.locator('#widget_cardNumber').click();
+  await humanDelay(page, 300, 600);
+  await page.locator('#widget_cardNumber').fill(USERNAME, { delay: 100 });
+  await humanDelay(page, 500, 1000);
+
+  // Type password
+  await page.locator('#widget_password').click();
+  await humanDelay(page, 300, 600);
+  await page.locator('#widget_password').fill(PASSWORD, { delay: 100 });
+  await humanDelay(page, 800, 1500);
+
+
+  await page.locator('#widget_cardNumber').click();
+  await humanDelay(page, 300, 600);
+
+  console.log('Clicking login button...');
+  await page.getByRole('button', { name: 'Login >' }).click();
+  await humanDelay(page, 2000, 3000);
+
+  console.log('Navigating to book test...');
+  await page.getByRole('link', { name: 'Book test »' }).click();
+  await humanDelay(page, 1000, 2000);
+
+  console.log('Selecting test type...');
+  await page.locator('#labelCAR').getByText('Car').click();
+  await humanDelay(page, 500, 1000);
+  await page.locator('#DC').getByText('Driving Test (DT)').click();
+  await humanDelay(page, 500, 1000);
+  await page.getByRole('button', { name: 'Next' }).click();
+  await humanDelay(page, 1000, 2000);
+
+  console.log('Accepting terms...');
+  await page.getByRole('checkbox', { name: 'I agree with these statements.' }).check();
+  await humanDelay(page, 800, 1500);
+  await page.getByRole('button', { name: 'Next' }).click();
+  await humanDelay(page, 1000, 2000);
+
+  console.log('Selecting location...');
+  await page.getByRole('radio', { name: 'Search by location' }).check();
+  await humanDelay(page, 500, 1000);
+  await page.getByLabel('Choose a test location').selectOption(location);
+  await humanDelay(page, 800, 1500);
+  await page.getByRole('button', { name: 'Next' }).click();
+
+  console.log('Waiting for schedule to load...');
+  await page.waitForSelector('.rms_timeSelPick', { timeout: 10000 });
+  await humanDelay(page, 1000, 2000);
+}
+
+
+async function makePayment(page, location = LOCATION) {
+  await page.getByRole('textbox', { name: 'Credit card number' }).click();
+  await page.getByRole('textbox', { name: 'Credit card number' }).fill('4111111111111111');
+  await page.getByLabel('Expiry date').selectOption('02');
+  await page.locator('#ccExpiryYear').selectOption('27');
+  await page.getByRole('textbox', { name: 'Card security number' }).click();
+  await page.getByRole('textbox', { name: 'Card security number' }).fill('666');
+  await page.getByRole('button', { name: 'Next' }).click();
+  await page.getByRole('checkbox', { name: 'Accept terms & conditions' }).check();
+  await page.getByRole('button', { name: 'Pay' }).click();
+}
+
+
+// Helper function to check for "no slots" modal
+async function checkForNoSlotsModal(page) {
+  const modal = page.locator('.rms_modal:has-text("There are no timeslots available")');
+  const isVisible = await modal.isVisible().catch(() => false);
+  return isVisible;
+}
+
+test.describe('Book Driving Test', () => {
+  test('should login and book a driving test', async ({ page }) => {
+    // Set longer timeout for the entire test
+    test.setTimeout(120000); // 2 minutes
+
+    // Check if script should run
+    if (!shouldRun()) {
+      console.log('⏸️  SHOULD_RUN is FALSE. Skipping test.');
+      console.log('💡 Set SHOULD_RUN to true in config.json to run again.');
+      return;
+    }
+
+    // Navigate through login and to schedule page
+    console.log('🚀 Starting booking process...');
+    await navigateToSchedule(page);
+
+    // Check for "no slots" modal
+    const noSlotsModalVisible = await checkForNoSlotsModal(page);
+    if (noSlotsModalVisible) {
+      console.log('\n❌ No timeslots available at this location');
+      console.log('💡 The site is showing "There are no timeslots available at this location."');
+      await page.screenshot({ path: 'no-slots-modal.png', fullPage: true });
+      console.log('📸 Screenshot saved as no-slots-modal.png');
+      await page.getByRole('link', { name: 'Log Out' }).click();
+      return;
+    }
+
+    // Find all available slots (links with class "available")
+    const availableSlots = await page.locator('a.available').all();
+
+    console.log(`\n✅ Found ${availableSlots.length} total available slots`);
+
+    if (availableSlots.length === 0) {
+      console.log('❌ No available slots found (no modal, but no slots either)');
+      await page.screenshot({ path: 'no-slots.png', fullPage: true });
+      console.log('📸 Screenshot saved as no-slots.png');
+      await page.getByRole('link', { name: 'Log Out' }).click();
+      return;
+    }
+
+    // Extract and display all available slots with dates and times
+    console.log('\n📅 All available slots:');
+
+    const slotsInfo = [];
+    for (let i = 0; i < availableSlots.length; i++) {
+      const slot = availableSlots[i];
+      const slotText = await slot.textContent();
+
+      // Parse date from column header
+      const tdElement = await slot.locator('..');
+      const columnIndex = await tdElement.evaluate(el => Array.from(el.parentElement.children).indexOf(el));
+      const dateHeader = await page.locator('.rms_timeSelTitle th').nth(columnIndex).textContent();
+
+      slotsInfo.push({ slot, time: slotText, date: dateHeader, index: i });
+      console.log(`  ${i + 1}. ${dateHeader?.trim()} at ${slotText?.trim()}`);
+    }
+
+    // Filter slots based on preferences
+    const filteredSlots = filterSlots(slotsInfo);
+
+    if (filteredSlots.length > 0 && filteredSlots.length < slotsInfo.length) {
+      console.log(`\n🎯 Filtered to ${filteredSlots.length} preferred slots:`);
+      filteredSlots.forEach((slot, i) => {
+        console.log(`  ${i + 1}. ${slot.date?.trim()} at ${slot.time?.trim()}`);
+      });
+    }
+
+    // Select slot (first filtered slot, or first available if no filters match)
+    const slotToBook = filteredSlots.length > 0 ? filteredSlots[0] : slotsInfo[0];
+
+    console.log(`\n🎯 Selecting: ${slotToBook.date?.trim()} at ${slotToBook.time?.trim()}`);
+    await humanDelay(page, 500, 1000); // Pause before clicking
+    await slotToBook.slot.click();
+
+    // Wait for confirmation or next step
+    await humanDelay(page, 1500, 2500);
+
+    await page.screenshot({ path: 'slot-selected.png', fullPage: true });
+    console.log('📸 Screenshot saved as slot-selected.png');
+
+    // Send notification about found slot
+    const notificationMessage = `🎯 Driving test slot found and selected!\n` +
+      `📅 Date: ${slotToBook.date?.trim()}\n` +
+      `⏰ Time: ${slotToBook.time?.trim()}\n` +
+      `📍 Location: ${LOCATION}\n` +
+      `Total available: ${availableSlots.length} slots`;
+
+    await sendNotification(notificationMessage);
+
+    // Stop future runs since we found a slot
+    stopFutureRuns();
+
+    // TODO: Add confirmation steps here if needed
+    await page.getByRole('button', { name: 'Next', exact: true }).click();
+    console.log('✅ Slot selected successfully!');
+  });
+
+  test('should check for available slots without booking', async ({ page }) => {
+    // Use this test to monitor availability without actually booking
+    test.setTimeout(120000);
+
+    // Check if script should run
+    if (!shouldRun()) {
+      console.log('⏸️  SHOULD_RUN is FALSE. Skipping test.');
+      console.log('💡 Set SHOULD_RUN to true in config.json to run again.');
+      return;
+    }
+
+    console.log('🔍 Checking slot availability...');
+    await navigateToSchedule(page);
+
+    console.log(`\n📊 Availability Report`);
+    console.log(`${'='.repeat(50)}`);
+
+    // Check for "no slots" modal first
+    const noSlotsModalVisible = await checkForNoSlotsModal(page);
+    if (noSlotsModalVisible) {
+      console.log('❌ No timeslots available at this location');
+      console.log('💡 The site displayed: "There are no timeslots available at this location."');
+      await page.screenshot({ path: 'availability-no-slots.png', fullPage: true });
+      console.log('📸 Screenshot saved as availability-no-slots.png');
+      console.log(`${'='.repeat(50)}`);
+      await page.getByRole('link', { name: 'Log Out' }).click();
+      return;
+    }
+
+    // Find all available slots
+    const availableSlots = await page.locator('a.available').all();
+    console.log(`Total available slots: ${availableSlots.length}`);
+
+    if (availableSlots.length === 0) {
+      console.log('❌ No slots available (no modal shown, but no available slots found)');
+      await page.screenshot({ path: 'availability-check.png', fullPage: true });
+      console.log(`${'='.repeat(50)}`);
+      await page.getByRole('link', { name: 'Log Out' }).click();
+      return;
+    }
+
+    // Group slots by date and time
+    const slotsByDate = {};
+
+    for (let i = 0; i < availableSlots.length; i++) {
+      const slot = availableSlots[i];
+      const slotText = await slot.textContent();
+      const tdElement = await slot.locator('..');
+      const columnIndex = await tdElement.evaluate(el => Array.from(el.parentElement.children).indexOf(el));
+      const dateHeader = await page.locator('.rms_timeSelTitle th').nth(columnIndex).textContent();
+      const date = dateHeader?.trim() || 'Unknown';
+
+      if (!slotsByDate[date]) {
+        slotsByDate[date] = [];
+      }
+      slotsByDate[date].push(slotText?.trim());
+    }
+
+    // Display grouped slots
+    console.log('\n📅 Available slots by date:');
+    for (const [date, times] of Object.entries(slotsByDate)) {
+      console.log(`\n  ${date}:`);
+      times.forEach(time => console.log(`    • ${time}`));
+    }
+
+    // Check for preferred slots
+    const slotsInfo = [];
+    for (let i = 0; i < availableSlots.length; i++) {
+      const slot = availableSlots[i];
+      const slotText = await slot.textContent();
+      const tdElement = await slot.locator('..');
+      const columnIndex = await tdElement.evaluate(el => Array.from(el.parentElement.children).indexOf(el));
+      const dateHeader = await page.locator('.rms_timeSelTitle th').nth(columnIndex).textContent();
+      slotsInfo.push({ slot, time: slotText, date: dateHeader, index: i });
+    }
+
+    const preferredSlots = filterSlots(slotsInfo);
+    if (preferredSlots.length > 0) {
+      console.log(`\n⭐ ${preferredSlots.length} preferred slots found!`);
+      preferredSlots.forEach((slot, i) => {
+        console.log(`  ${i + 1}. ${slot.date?.trim()} at ${slot.time?.trim()}`);
+      });
+    } else if (PREFERRED_DAYS.length > 0 || PREFERRED_TIMES.length > 0) {
+      console.log('\n❌ No slots match your preferences');
+    }
+
+    // Build notification message
+    let notificationMessage = `✅ Driving test slots available!\n` +
+      `📍 Location: ${LOCATION}\n` +
+      `📊 Total slots: ${availableSlots.length}\n`;
+
+    if (preferredSlots.length > 0) {
+      notificationMessage += `⭐ Preferred slots: ${preferredSlots.length}\n\n`;
+      notificationMessage += 'Top preferred slots:\n';
+      preferredSlots.slice(0, 5).forEach((slot, i) => {
+        notificationMessage += `${i + 1}. ${slot.date?.trim()} at ${slot.time?.trim()}\n`;
+      });
+    } else {
+      notificationMessage += '\nFirst few slots:\n';
+      slotsInfo.slice(0, 5).forEach((slot, i) => {
+        notificationMessage += `${i + 1}. ${slot.date?.trim()} at ${slot.time?.trim()}\n`;
+      });
+    }
+
+    await sendNotification(notificationMessage);
+
+    // Stop future runs since we found slots
+    stopFutureRuns();
+
+    await page.screenshot({ path: 'availability-check.png', fullPage: true });
+    console.log('\n📸 Screenshot saved as availability-check.png');
+    console.log(`${'='.repeat(50)}`);
+    await page.getByRole('link', { name: 'Log Out' }).click();
+  });
+
+  test('should check multiple locations for available slots', async ({ page }) => {
+    // Check multiple locations if specified in .env (LOCATIONS=37,38,39)
+    test.setTimeout(300000); // 5 minutes for multiple locations
+
+    // Check if script should run
+    if (!shouldRun()) {
+      console.log('⏸️  SHOULD_RUN is FALSE. Skipping test.');
+      console.log('💡 Set SHOULD_RUN to true in config.json to run again.');
+      return;
+    }
+
+    if (LOCATIONS.length === 1) {
+      console.log('⚠️  Only one location configured. Set LOCATIONS in .env to check multiple locations.');
+      return;
+    }
+
+    console.log(`🔍 Checking ${LOCATIONS.length} locations for availability...\n`);
+
+    const results = [];
+
+    for (let i = 0; i < LOCATIONS.length; i++) {
+      const location = LOCATIONS[i];
+      console.log(`${'='.repeat(50)}`);
+      console.log(`📍 Checking location ${i + 1}/${LOCATIONS.length} (code: ${location})`);
+      console.log(`${'='.repeat(50)}`);
+
+      try {
+        if (i === 0) {
+          // First location - do full login
+          await navigateToSchedule(page, location);
+        } else {
+          // Subsequent locations - just change location
+          await page.getByRole('button', { name: 'Back' }).click();
+          await page.waitForTimeout(1000);
+          await page.getByLabel('Choose a test location').selectOption(location);
+          await page.getByRole('button', { name: 'Next' }).click();
+          await page.waitForSelector('.rms_timeSelPick', { timeout: 10000 });
+          await page.waitForTimeout(1000);
+        }
+
+        // Check for modal
+        const noSlotsModalVisible = await checkForNoSlotsModal(page);
+        if (noSlotsModalVisible) {
+          console.log('❌ No timeslots available');
+          results.push({ location, available: 0, preferred: 0 });
+          continue;
+        }
+
+        // Count slots
+        const availableSlots = await page.locator('a.available').all();
+        console.log(`✅ Found ${availableSlots.length} available slots`);
+
+        if (availableSlots.length > 0) {
+          // Get slot details
+          const slotsInfo = [];
+          for (let j = 0; j < Math.min(availableSlots.length, 20); j++) {
+            const slot = availableSlots[j];
+            const slotText = await slot.textContent();
+            const tdElement = await slot.locator('..');
+            const columnIndex = await tdElement.evaluate(el => Array.from(el.parentElement.children).indexOf(el));
+            const dateHeader = await page.locator('.rms_timeSelTitle th').nth(columnIndex).textContent();
+            slotsInfo.push({ slot, time: slotText, date: dateHeader, index: j });
+          }
+
+          const preferredSlots = filterSlots(slotsInfo);
+
+          if (preferredSlots.length > 0) {
+            console.log(`⭐ ${preferredSlots.length} preferred slots found!`);
+            preferredSlots.slice(0, 5).forEach((slot, idx) => {
+              console.log(`  ${idx + 1}. ${slot.date?.trim()} at ${slot.time?.trim()}`);
+            });
+          }
+
+          results.push({
+            location,
+            available: availableSlots.length,
+            preferred: preferredSlots.length,
+            firstFew: slotsInfo.slice(0, 3)
+          });
+        } else {
+          results.push({ location, available: 0, preferred: 0 });
+        }
+
+      } catch (error) {
+        console.error(`❌ Error checking location ${location}: ${error.message}`);
+        results.push({ location, available: 0, preferred: 0, error: error.message });
+      }
+
+      console.log('');
+    }
+
+    await page.getByRole('link', { name: 'Log Out' }).click();
+
+    // Summary
+    console.log(`\n${'='.repeat(50)}`);
+    console.log('📊 SUMMARY - All Locations');
+    console.log(`${'='.repeat(50)}`);
+
+    results.forEach((result, i) => {
+      const status = result.available > 0 ? '✅' : '❌';
+      console.log(`${status} Location ${result.location}: ${result.available} slots`);
+      if (result.preferred > 0) {
+        console.log(`   ⭐ ${result.preferred} preferred slots`);
+      }
+      if (result.error) {
+        console.log(`   ⚠️  Error: ${result.error}`);
+      }
+    });
+
+    const locationsWithSlots = results.filter(r => r.available > 0);
+    const locationsWithPreferred = results.filter(r => r.preferred > 0);
+
+    console.log(`\n📈 Total: ${locationsWithSlots.length}/${results.length} locations have available slots`);
+    if (locationsWithPreferred.length > 0) {
+      console.log(`⭐ ${locationsWithPreferred.length} locations have preferred slots!`);
+      console.log('\nBest locations:');
+      locationsWithPreferred
+        .sort((a, b) => b.preferred - a.preferred)
+        .forEach(r => {
+          console.log(`  - Location ${r.location}: ${r.preferred} preferred slots`);
+        });
+    }
+
+    // Stop future runs if any slots were found
+    if (locationsWithSlots.length > 0) {
+      // Build notification message
+      let notificationMessage = `✅ Driving test slots found across multiple locations!\n\n`;
+      notificationMessage += `📊 Summary: ${locationsWithSlots.length}/${results.length} locations have slots\n\n`;
+
+      if (locationsWithPreferred.length > 0) {
+        notificationMessage += `⭐ ${locationsWithPreferred.length} locations with preferred slots:\n`;
+        locationsWithPreferred
+          .sort((a, b) => b.preferred - a.preferred)
+          .slice(0, 5)
+          .forEach(r => {
+            notificationMessage += `  📍 Location ${r.location}: ${r.preferred} preferred / ${r.available} total\n`;
+          });
+      } else {
+        notificationMessage += 'Top locations:\n';
+        locationsWithSlots
+          .sort((a, b) => b.available - a.available)
+          .slice(0, 5)
+          .forEach(r => {
+            notificationMessage += `  📍 Location ${r.location}: ${r.available} slots\n`;
+          });
+      }
+
+      await sendNotification(notificationMessage);
+      stopFutureRuns();
+    }
+
+    console.log(`${'='.repeat(50)}`);
+
+    await page.screenshot({ path: 'multi-location-check.png', fullPage: true });
+    console.log('📸 Screenshot saved as multi-location-check.png');
+  });
+});

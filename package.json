@@ -1,0 +1,29 @@
+{
+  "name": "driving-test",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:debug": "playwright test --debug",
+    "book": "playwright test tests/book.spec.js",
+    "book:headed": "playwright test tests/book.spec.js --headed",
+    "check": "playwright test tests/check.spec.js",
+    "check:headed": "playwright test tests/check.spec.js --headed",
+    "check:multi": "playwright test tests/multi-location.spec.js",
+    "check:multi:headed": "playwright test tests/multi-location.spec.js --headed",
+    "reset": "node reset-flag.js",
+    "codegen": "playwright codegen https://www.myrta.com/wps/portal/extvp/myrta/licence/tbs/tbs-login/",
+    "show-report": "playwright show-report"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "@playwright/test": "^1.58.1"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3"
+  }
+}
