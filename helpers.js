@@ -165,6 +165,45 @@ async function navigateToSchedule(page, location = LOCATION) {
   await humanDelay(page, 1000, 2000);
 }
 
+// Reschedule navigation
+async function navigateToReschedule(page, location = LOCATION) {
+  console.log('Navigating to login page...');
+  await page.goto(LOGIN_URL, { waitUntil: 'networkidle' });
+  await humanDelay(page, 1000, 2000);
+
+  console.log('Clicking "Log in - you have an account"...');
+  await page.getByText('Log in - you have an account').click();
+  await humanDelay(page, 1500, 2500);
+
+  console.log('Waiting for login form...');
+  await page.waitForSelector('#widget_cardNumber', { timeout: 10000 });
+  await humanDelay(page, 500, 1000);
+
+  console.log('Filling in credentials...');
+  await page.locator('#widget_cardNumber').click();
+  await humanDelay(page, 300, 600);
+  await page.locator('#widget_cardNumber').fill(USERNAME, { delay: 100 });
+  await humanDelay(page, 500, 1000);
+
+  await page.locator('#widget_password').click();
+  await humanDelay(page, 300, 600);
+  await page.locator('#widget_password').fill(PASSWORD, { delay: 100 });
+  await humanDelay(page, 800, 1500);
+
+  await page.locator('#widget_cardNumber').click();
+  await humanDelay(page, 300, 600);
+
+  console.log('Clicking login button...');
+  await page.getByRole('button', { name: 'Login >' }).click();
+  await humanDelay(page, 2000, 3000);
+
+  console.log('Navigating to manage bookings...');
+  await page.getByRole('link', { name: 'Manage booking »' }).click();
+  await humanDelay(page, 1000, 2000);
+
+  
+}
+
 // Payment (if needed)
 async function makePayment(page) {
   await page.getByRole('textbox', { name: 'Credit card number' }).click();
@@ -206,6 +245,7 @@ module.exports = {
   humanDelay,
   filterSlots,
   navigateToSchedule,
+  navigateToReschedule,
   makePayment,
   checkForNoSlotsModal
 };
